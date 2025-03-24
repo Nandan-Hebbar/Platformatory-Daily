@@ -1,7 +1,7 @@
 # Platformatory-Daily
 Codes of daily tasks assigned.
 
-**Confluent Kafka command**
+**Kafka commands**
 
 To start service name
 --> sudo systemctl start confluent- <service-name>
