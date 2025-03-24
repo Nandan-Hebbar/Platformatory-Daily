@@ -1,0 +1,148 @@
+Implementation of SASL plaintext in Docker Compose
+
+cd /etc/kafka/configs
+
+1) Create Client Properties
+echo "security.protocol=SASL_PLAINTEXT" > client-sasl.properties
+echo "sasl.mechanism=PLAIN" >> client-sasl.properties
+echo "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \\" >> client-sasl.properties
+echo "    username=\"nandan\" \\" >> client-sasl.properties
+echo "    password=\"729999\";" >> client-sasl.properties
+echo "max.request.size=209715200" >> client-sasl.properties
+
+2) Create Server JAAS Configuration
+echo "KafkaServer {" >> kafka_server_jaas.conf
+echo "    org.apache.kafka.common.security.plain.PlainLoginModule required" >> kafka_server_jaas.conf
+echo "    username=\"nandan\"" >> kafka_server_jaas.conf
+echo "    password=\"729999\"" >> kafka_server_jaas.conf
+echo "    user_nandan=\"729999\";" >> kafka_server_jaas.conf
+echo "};" >> kafka_server_jaas.conf
+
+
+
+
+
+version: '3.7'
+services:
+  zookeeper:
+    image: 'confluentinc/cp-zookeeper'
+    container_name: zookeeper
+    ports:
+      - '2182:2181'
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - /etc/kafka/data/zookeeper_data:/var/lib/zookeeper/data
+      - /etc/kafka/data/zookeeper_log:/var/lib/zookeeper/log
+    restart: always
+
+  kafka-1:
+    image: 'confluentinc/cp-server:latest'
+    container_name: kafka-1
+    depends_on:
+      - zookeeper
+    ports:
+      - '9094:9094'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      ZOOKEEPER_SASL_ENABLED: 'false'
+      KAFKA_JVM_PERFORMANCE_OPTS: "-Xms1G -Xmx2G"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094,INTERNAL://kafka-1:9092,SASL_PLAINTEXT://kafka-1:9098
+      KAFKA_SECURITY_INTER_BROKER_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9094,INTERNAL://0.0.0.0:9092,SASL_PLAINTEXT://0.0.0.0:9098
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/configs/kafka_server_jaas.conf"
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+      - ./certs:/etc/kafka/secrets
+      - ./configs:/etc/kafka/configs
+    restart: always
+
+  kafka-2:
+    image: 'confluentinc/cp-server:latest'
+    container_name: kafka-2
+    depends_on:
+      - zookeeper
+      - kafka-1
+    ports:
+      - '9095:9095'
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      ZOOKEEPER_SASL_ENABLED: 'false'
+      KAFKA_JVM_PERFORMANCE_OPTS: "-Xms1G -Xmx2G"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9095,INTERNAL://kafka-2:9092,SASL_PLAINTEXT://kafka-2:9098
+      KAFKA_SECURITY_INTER_BROKER_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9095,INTERNAL://0.0.0.0:9092,SASL_PLAINTEXT://0.0.0.0:9098
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/configs/kafka_server_jaas.conf"
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+      - ./certs:/etc/kafka/secrets
+      - ./configs:/etc/kafka/configs
+    restart: always
+
+  kafka-3:
+    image: 'confluentinc/cp-server:latest'
+    container_name: kafka-3
+    depends_on:
+      - zookeeper
+      - kafka-1
+      - kafka-2
+    ports:
+      - '9096:9096'
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      ZOOKEEPER_SASL_ENABLED: 'false'
+      KAFKA_JVM_PERFORMANCE_OPTS: "-Xms1G -Xmx2G"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9096,INTERNAL://kafka-3:9092,SASL_PLAINTEXT://kafka-3:9098
+      KAFKA_SECURITY_INTER_BROKER_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9096,INTERNAL://0.0.0.0:9092,SASL_PLAINTEXT://0.0.0.0:9098
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/configs/kafka_server_jaas.conf"
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+      - ./certs:/etc/kafka/secrets
+      - ./configs:/etc/kafka/configs
+    restart: always
+
+volumes:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
+
+
+
+
+
+-->Test by creating a test topic and produce some message and consume using the below command
+
+
+sudo docker-compose exec --user root kafka-1 /bin/bash
+
+kafka-topics --create --topic sasl-ssl-demo --bootstrap-server kafka-1:9092 --partitions 1 --replication-factor 1
+
+kafka-topics --list --bootstrap-server kafka-1:9092
+
+
+
+
+-->Produce using
+
+kafka-console-producer --bootstrap-server kafka-1:9098 --topic sasl-plaintext-test --producer.config /etc/kafka/configs/client-sasl.properties
+
+
+kafka-console-consumer --bootstrap-server kafka-1:9098 --topic sasl-ssl-demo --from-beginning --consumer.config /etc/kafka/configs/client-sasl.properties
+
