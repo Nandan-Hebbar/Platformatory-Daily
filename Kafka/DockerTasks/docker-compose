@@ -1,3 +1,5 @@
+This is a simple docker-compose.yml file to deploy a kafka cluster with 3 broker 
+
 To open bash
 
 sudo docker-compose exec --user root kafka-1 /bin/bash
