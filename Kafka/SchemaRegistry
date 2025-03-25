@@ -1,0 +1,222 @@
+sudo mkdir -p src/main/avro/com/linuxacademy/ccdak/schemaregistry
+
+-->Create a schema for purchases:
+sudo vi src/main/avro/com/linuxacademy/ccdak/schemaregistry/Purchase.avsc
+
+{
+  "namespace": "com.linuxacademy.ccdak.schemaregistry",
+  "type": "record",
+  "name": "Purchase",
+  "fields": [
+    {"name": "id", "type": "int"},
+    {"name": "product", "type": "string"},
+    {"name": "quantity", "type": "int"}
+  ]
+}
+
+-->Implementation the producer:
+
+sudo vi src/main/java/com/linuxacademy/ccdak/schemaregistry/ProducerMain.java
+
+package com.linuxacademy.ccdak.schemaregistry;
+
+import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import java.util.Properties;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+public class ProducerMain {
+
+    public static void main(String[] args) {
+        final Properties props = new Properties();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(ProducerConfig.ACKS_CONFIG, "all");
+        props.put(ProducerConfig.RETRIES_CONFIG, 0);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
+        props.put(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, "http://localhost:8081");
+
+        KafkaProducer<String, Purchase> producer = new KafkaProducer<String, Purchase>(props);
+
+        Purchase apples = new Purchase(1, "apples", 17, 9);
+        producer.send(new ProducerRecord<String, Purchase>("schregdemo", apples.getId().toString(), apples));
+
+        Purchase oranges = new Purchase(2, "oranges", 5, 8);
+        producer.send(new ProducerRecord<String, Purchase>("schregdemo", oranges.getId().toString(), oranges));
+
+        producer.close();
+
+    }
+
+}
+
+-->Implementation of the consumer:
+
+sudo vi src/main/java/com/linuxacademy/ccdak/schemaregistry/ConsumerMain.java
+
+package com.linuxacademy.ccdak.schemaregistry;
+
+import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+
+public class ConsumerMain {
+
+    public static void main(String[] args) {
+        final Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "group1");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
+        props.put(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, "1000");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, "http://localhost:8081");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
+        props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
+
+        KafkaConsumer<String, Purchase> consumer = new KafkaConsumer<>(props);
+
+        consumer.subscribe(Collections.singletonList("schregdemo"));
+
+        try {
+            BufferedWriter writer = new BufferedWriter(new FileWriter("/home/nandan/schregoutput.txt", true));
+            while (true) {
+                final ConsumerRecords<String, Purchase> records = consumer.poll(Duration.ofMillis(100));
+                for (final ConsumerRecord<String, Purchase> record : records) {
+                    final String key = record.key();
+                    final Purchase value = record.value();
+                    String outputString = "key=" + key + ", value=" + value;
+                    System.out.println(outputString);
+                    writer.write(outputString + "\n");
+                }
+                writer.flush();
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+}
+
+
+-->Run the producer:
+./gradlew runProducer
+
+-->Run the consumer:
+./gradlew runConsumer
+
+-->Verify the data in the output file:
+cat /home/nandan/schregoutput.txt
+
+
+-->Managing changes in the avro schema
+
+Compatibility type
+1. Backward(Default)                                      
+2. Backward Transitive                                 
+3. Forward                                             
+4. Forward Transitive                                 
+5. Full                                                                        
+6. Full Transitive                                                           
+7. None                            
+
+-->Backward Compatibility
+
+New schemas are compatible with data written by old schemas.
+Consumers using the new schema can read data written with any previous version of the schema.
+Use Case: Ensures newer consumers can handle older data.
+Example: Adding a new optional field or removing an unused field.
+
+Schema Evolution Rules:
+
+Fields can be added with a default value.
+Fields can be removed if not required.
+
+
+
+-->Backward Transitive Compatibility
+New schemas are compatible with all previous versions of schemas (not just the last one).
+Use Case: Ensures that a schema evolves without breaking compatibility with any prior schema version.
+
+
+Schema Evolution Rules:
+
+Same as backward and forward compatibility.
+
+
+
+-->Forward Compatibility
+
+Old schemas are compatible with data written by new schemas.
+Consumers using the old schema can read data written with the new schema.
+Use Case: Ensures older consumers can process data written using newer schemas.
+Example: Adding a new field with a default value.
+
+Schema Evolution Rules:
+
+Fields can be added with default values.
+Fields can be removed.
+
+
+
+
+-->Forward Transitive Compatibility
+Old schemas are compatible with all future versions of schemas.
+Use Case: Ensures that data written with the current schema can be read by all future schema versions.
+
+
+
+
+-->Full Compatibility
+
+Combines both backward and forward compatibility.
+Both old and new schemas can read data written by each other.
+Use Case: Maximum flexibility for schema evolution while ensuring interoperability.
+Example: Adding an optional field with a default value.
+
+
+
+
+
+-->Full Transitive Compatibility
+Combines backward transitive and forward transitive compatibility.
+Use Case: Guarantees maximum compatibility across all schema versions.
+
+
+-->None
+No compatibility checks are enforced.
+Use Case: Useful during development or when compatibility is not a concern. However, this setting risks breaking consumers.
+
+-->Goto sudo vi src/main/avro/com/linuxacademy/ccdak/schemaregistry/Purchase.avsc and add another field Discount and compatibility type
+
+{
+  "namespace": "com.linuxacademy.ccdak.schemaregistry",
+  "compatibility":"BACKWARD",
+  "type": "record",
+  "name": "Purchase",
+  "fields": [
+    {"name": "id", "type": "int"},
+    {"name": "product", "type": "string"},
+    {"name": "quantity", "type": "int"},
+    {"name": "discount", "type": "int", "default": ""}
+  ]
+}
+
+In the producer add the discount field in the constructor 
+There is no need to make changes in the consumer because there is no explicit reference made to it and it is simply printing the corresponding key value pair
+
+

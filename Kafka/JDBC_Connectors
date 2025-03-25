@@ -1,0 +1,48 @@
+-->Run
+sudo pg_ctlcluster 12 main start
+
+--> To login into psql console
+sudo -u postgres psql
+
+--> To create a Database
+CREATE DATABASE inventory3;
+
+-->To list all the databases with its ownership details 
+\l 
+
+-->To Move inside it
+\c inventory3
+
+-->Create table inside inventory database
+CREATE TABLE purchases (
+    id SERIAL PRIMARY KEY,
+    item_name VARCHAR(100),
+    quantity INT,
+    price DECIMAL(10, 2),
+    update_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-->Insert Data
+INSERT INTO purchases (item_name, quantity, price) VALUES ("   ",   ,   );
+
+SELECT * FROM purchases;
+
+-->Exit from psql console
+\q
+
+
+JDBC Connector format
+
+curl -X POST http://localhost:8083/connectors -H "Content-Type: application/json" -d '{
+"name": "jdbc_source_postgres",
+"config": {
+"connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
+"connection.url": "jdbc:postgresql://127.0.0.1:5432/inventory3",
+"connection.user": "postgres",
+"connection.password": "729999",
+"topic.prefix": "postgresql-",
+"mode":"timestamp",
+"timestamp.column.name": "update_ts"
+}
+}'
+

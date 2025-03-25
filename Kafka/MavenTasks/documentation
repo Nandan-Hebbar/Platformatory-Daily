@@ -1,0 +1,448 @@
+ project-root/
+│
+├── src/
+│   ├── main/
+│   │   ├── java/                     # Application/Library source code
+│   │   │   └── com/
+│   │   │       └── example/
+│   │   │           └── MyClass.java
+│   │   ├── resources/                # Configuration files, static resources
+│   │       └── application.properties
+│   │
+│   ├── test/
+│       ├── java/                     # Test source code
+│       │   └── com/
+│       │       └── example/
+│       │           └── MyClassTest.java
+│       ├── resources/                # Test-specific resources
+│           └── test-config.properties
+│
+├── target/                           # Compiled bytecode, JAR files, and build output (generated after building)
+│   ├── classes/
+│   ├── test-classes/
+│   ├── myproject-1.0.jar
+│
+├── pom.xml                           # Project Object Model file (Maven configuration)
+
+
+
+Maven installation
+
+1. Update the Package Repository:
+sudo apt update
+
+2. Install Maven:
+sudo apt install maven
+
+3. Verify installation
+mvn -version
+
+
+
+-->To create a Maven project
+
+mvn archetype:generate -DgroupId=com.evenapp -DartifactId=even-number-app -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
+
+
+-->To compile maven project
+
+mvn compile exec:java -Dexec.mainClass="com.example.JavaProducer"
+
+
+-->To build the project
+
+mvn clean package
+
+
+-->To run the application
+
+java -cp target/even-number-app-1.0-SNAPSHOT.jar com.evenapp.App
+
+
+-->To manually reset the offset to 0
+
+kafka-consumer-groups --bootstrap-server localhost:9092 --group even-number-group --reset-offsets --to-earliest --execute --topic even-numbers
+
+
+-->To run Producer/Consumer alone
+
+mvn compile exec:java -Dexec.mainClass="com.example.EvenNumberProducer"
+mvn compile exec:java -Dexec.mainClass="com.example.EvenNumberConsumer"
+
+
+-->Add the dependencies, for every project you might have to add dependencies in pom.xml file
+
+
+
+
+-->Task 1:
+Write a producer to print all even numbers from 1 to 1000 and then consume it using java prod and consumer using Maven
+
+-->EvenNumberProducer.java
+
+package com.example;
+
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+
+import java.util.Properties;
+
+public class EvenNumberProducer {
+    public static void main(String[] args) {
+        String topic = "even-numbers";
+
+        Properties props = new Properties();
+        props.put("bootstrap.servers", "localhost:9092");
+        props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+
+        KafkaProducer<String, String> producer = new KafkaProducer<>(props);
+
+        for (int i = 2; i <= 1000; i += 2) {
+            producer.send(new ProducerRecord<>(topic, Integer.toString(i)));
+            System.out.println("Produced: " + i);
+        }
+
+        producer.close();
+    }
+}
+
+
+-->EvenNumberConsumer.java
+
+package com.example;
+
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
+
+public class EvenNumberConsumer {
+    public static void main(String[] args) {
+        String topic = "even-numbers";
+
+        Properties props = new Properties();
+        props.put("bootstrap.servers", "localhost:9092");
+        props.put("group.id", "even-number-group");
+	props.put("auto.offset.reset","earliest");
+        props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
+        consumer.subscribe(Collections.singletonList(topic));
+
+        while (true) {
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+            for (ConsumerRecord<String, String> record : records) {
+                System.out.println("Consumed: " + record.value());
+            }
+        }
+    }
+}
+
+
+--Task 2:
+Write java producer to produce json data from a file and then consume it using java consumer using Maven
+
+
+-->Create a json file under /src/main/resources directory with the following structure that is the input for the kafka topic
+
+[
+  {"id": 1, "name": "Dave"},
+  {"id": 2, "name": "Damon"},
+  {"id": 3, "name": "Mark"}
+]
+
+
+-->Producer code
+
+package com.example;
+
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Properties;
+
+public class JsonProducer {
+    public static void main(String[] args) throws IOException {
+        String topic = "json-topic";
+
+        // Kafka Producer Properties
+        Properties props = new Properties();
+        props.put("bootstrap.servers", "localhost:9092");
+        props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+
+        KafkaProducer<String, String> producer = new KafkaProducer<>(props);
+
+        // Read JSON data from file
+        String filePath = "src/main/resources/inputfile.json";
+        String jsonData = new String(Files.readAllBytes(Paths.get(filePath)));
+
+        // Send JSON data to Kafka
+        producer.send(new ProducerRecord<>(topic, "json_key", jsonData));
+        System.out.println("JSON data sent to topic: " + topic);
+
+        producer.close();
+    }
+}
+
+
+
+
+-->Consumer code
+
+package com.example;
+
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
+
+public class JsonConsumer {
+    public static void main(String[] args) {
+        String topic = "json-topic";
+
+        // Kafka Consumer Properties
+        Properties props = new Properties();
+        props.put("bootstrap.servers", "localhost:9092");
+        props.put("group.id", "json-consumer-group");
+        props.put("auto.offset.reset", "earliest");
+        props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
+
+        // Subscribe to topic
+        consumer.subscribe(Collections.singletonList(topic));
+
+        // Consume messages
+        while (true) {
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+            for (ConsumerRecord<String, String> record : records) {
+                System.out.println("Consumed JSON: " + record.value());
+            }
+        }
+    }
+}
+
+
+
+-->Task 3:
+
+Write a java consumer to consume avro data, generate the avro data using a datagen connector using Maven
+
+
+
+
+sudo systemctl start confluent-zookeeper
+sudo systemctl start confluent-kafka
+sudo systemctl start confluent-kafka-connect
+sudo systemctl start confluent-kafka-rest
+sudo systemctl start confluent-schema-registry
+
+
+
+kafka-topics --create --topic avrotopic3 --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+
+-->under src/main/resources/avro/ place your user.avsc with the following format
+
+{
+  "type": "record",
+  "name": "User",
+  "fields": [
+    {"name": "id", "type": "int"},
+    {"name": "name", "type": "string"},
+    {"name": "age", "type": "int"},
+    {"name": "email", "type": "string"}
+  ]
+}
+
+
+-->Run the Maven command to generate the Avro Java classes:
+
+mvn generate-sources
+
+
+-->Create an output directory under target/generated-sources 
+
+-->In the home directory of the app create a json file to store the connector configuration and place the code below
+
+{
+  "name": "datagen-connector3",
+  "config": {
+    "connector.class": "io.confluent.kafka.connect.datagen.DatagenConnector",
+    "kafka.topic": "avrotopic3",
+    "quickstart": "users",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://localhost:8081",
+    "tasks.max": "1"
+  }
+}
+
+
+
+
+-->Submit the connector Configuration
+
+ Use the Kafka Connect REST API to submit the configuration
+
+  Run the following curl command to post the configuration to your Kafka Connect instance:
+
+curl -X POST -H "Content-Type: application/json" --data @datagen-connector-config.json http://localhost:8083/connectors
+
+
+
+
+-->Check status of the connector and see if thats running
+
+curl -X GET http://localhost:8083/connectors/datagen-connector/status
+
+
+
+-->Consumer code
+
+package com.avroapp;
+
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
+
+public class AvroConsumer {
+
+    public static void main(String[] args) {
+        String topic = "avrotopic3";
+        String bootstrapServers = "localhost:9092";
+        String schemaRegistryUrl = "http://localhost:8081";
+
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "avro-consumers-group");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringDeserializer");
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class.getName());
+        props.put("auto.offset.reset", "earliest");
+        props.put("schema.registry.url", schemaRegistryUrl);
+
+        Consumer<String, Object> consumer = new KafkaConsumer<>(props);
+        consumer.subscribe(Collections.singletonList(topic));
+
+        System.out.println("Listening for Avro messages on topic: " + topic);
+
+        try {
+            while (true) {
+                ConsumerRecords<String, Object> records = consumer.poll(Duration.ofMillis(1000));
+                records.forEach(record -> {
+                    System.out.printf("Key: %s, Value: %s%n", record.key(), record.value());
+                });
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            consumer.close();
+        }
+    }
+}
+
+
+
+
+-->Equivalent python code for this
+
+
+from confluent_kafka import Consumer
+from confluent_kafka.avro import AvroConsumer
+from confluent_kafka.avro.serializer import SerializerError
+
+
+def main():
+    topic = "avrotopic3"
+    bootstrap_servers = "localhost:9092"
+    schema_registry_url = "http://localhost:8081"
+
+    # Consumer configuration
+    consumer_config = {
+        'bootstrap.servers': bootstrap_servers,
+        'group.id': 'avro-consumers-group',
+        'auto.offset.reset': 'earliest',
+        'schema.registry.url': schema_registry_url
+    }
+
+    # Create Avro consumer
+    consumer = AvroConsumer(consumer_config)
+    consumer.subscribe([topic])
+
+    print(f"Listening for Avro messages on topic: {topic}")
+
+    try:
+        while True:
+            try:
+                # Poll for messages
+                message = consumer.poll(timeout=1.0)
+
+                if message is None:
+                    continue
+
+                if message.error():
+                    print(f"Consumer error: {message.error()}")
+                    continue
+
+                # Print the message key and value
+                print(f"Key: {message.key()}, Value: {message.value()}")
+
+            except SerializerError as e:
+                print(f"Message deserialization failed: {e}")
+                continue
+
+    except KeyboardInterrupt:
+        print("Aborted by user")
+
+    finally:
+        # Close the consumer
+        consumer.close()
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+-->Clean and compile the project to ensure the package structure is correct
+
+mvn clean compile
+
+
+-->Run the project 
+
+mvn exec:java -Dexec.mainClass="com.avroapp.AvroConsumer"
+
+
+
+-->You should see the randomly generated output referring to your schema like
+
+Listening for Avro messages on topic: avro_topic
+Key: User_7, Value: {"registertime": 1498111634110, "userid": "User_7", "regionid": "Region_7", "gender": "MALE"}
+Key: User_4, Value: {"registertime": 1508596987426, "userid": "User_4", "regionid": "Region_4", "gender": "MALE"}
+Key: User_3, Value: {"registertime": 1491855539024, "userid": "User_3", "regionid": "Region_8", "gender": "OTHER"}
+Key: User_4, Value: {"registertime": 1511737278946, "userid": "User_4", "regionid": "Region_2", "gender": "FEMALE"}
+Key: User_1, Value: {"registertime": 1510893814669, "userid": "User_1", "regionid": "Region_3", "gender": "OTHER"}
+Key: User_5, Value: {"registertime": 1496154112225, "userid": "User_5", "regionid": "Region_6", "gender": "MALE"}
+Key: User_3, Value: {"registertime": 1488223068497, "userid": "User_3", "regionid": "Region_7", "gender": "OTHER"}
+
+
+
