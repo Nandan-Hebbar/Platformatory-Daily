@@ -1,0 +1,467 @@
+Uses auto generated certificates
+
+1. Create a kind-config file
+nano kind-config.yaml
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30090
+        hostPort: 30090
+      - containerPort: 30093
+        hostPort: 30093
+      - containerPort: 30080
+        hostPort: 30080
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+
+
+
+2. Create a kind cluster with the config file given below
+kind create cluster --name cfk-mtls-cluster --config kind-config.yaml
+
+
+
+3. Check the cluster info
+kubectl cluster-info --context kind-cfk-mtls-cluster
+
+
+4. Create a namespace 
+kubectl create namespace confluent
+
+
+5. Install Confluent For Kubernetes using Helm:
+helm upgrade --install operator confluentinc/confluent-for-kubernetes --namespace confluent
+
+
+6. Refer the content of this shell script for generating the custom certificates for each and every components
+---
+#!/bin/bash
+
+set -e
+
+# === CONFIG ===
+CA_DIR=certs/ca
+COMPONENTS=("kraftcontroller" "kafka" "connect" "schemaregistry" "ksqldb" "controlcenter" "kafkarestproxy")
+NAMESPACE=confluent
+DAYS_VALID=1000
+CLUSTER_DOMAIN="svc.cluster.local"
+
+# === Create CA ===
+mkdir -p $CA_DIR
+openssl genrsa -out $CA_DIR/ca.key 4096
+openssl req -x509 -new -nodes -key $CA_DIR/ca.key -sha256 -days 3650 -out $CA_DIR/ca.pem \
+  -subj "/C=IN/ST=KA/L=Bangalore/O=Platformatory/OU=PlatformTeam/CN=platformatory-ca"
+
+# === Generate certs for each component ===
+for COMPONENT in "${COMPONENTS[@]}"; do
+  echo "Generating certificate for $COMPONENT"
+  COMP_DIR=certs/$COMPONENT
+  mkdir -p $COMP_DIR
+
+  # Private Key
+  openssl genrsa -out $COMP_DIR/${COMPONENT}.key 2048
+
+  # CSR
+  openssl req -new -key $COMP_DIR/${COMPONENT}.key -out $COMP_DIR/${COMPONENT}.csr \
+    -subj "/C=IN/ST=KA/L=Bangalore/O=Platformatory/OU=Confluent/CN=${COMPONENT}.${NAMESPACE}.${CLUSTER_DOMAIN}"
+
+  # SAN config
+  cat > $COMP_DIR/${COMPONENT}.ext <<EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = kraftcontroller
+DNS.2 = kraftcontroller.confluent
+DNS.3 = kraftcontroller.confluent.svc
+DNS.4 = kraftcontroller.confluent.svc.cluster.local
+DNS.5 = kraftcontroller-0.kraftcontroller.confluent.svc.cluster.local
+DNS.6 = kraftcontroller-1.kraftcontroller.confluent.svc.cluster.local
+DNS.7 = kraftcontroller-2.kraftcontroller.confluent.svc.cluster.local
+EOF
+
+  # Signed cert
+  openssl x509 -req -in $COMP_DIR/${COMPONENT}.csr -CA $CA_DIR/ca.pem -CAkey $CA_DIR/ca.key \
+    -CAcreateserial -out $COMP_DIR/${COMPONENT}.crt -days $DAYS_VALID -sha256 \
+    -extfile $COMP_DIR/${COMPONENT}.ext
+
+  # Kubernetes secret
+  kubectl create secret generic tls-${COMPONENT} \
+    --from-file=fullchain.pem=$COMP_DIR/${COMPONENT}.crt \
+    --from-file=cacerts.pem=$CA_DIR/ca.pem \
+    --from-file=privkey.pem=$COMP_DIR/${COMPONENT}.key \
+    --namespace $NAMESPACE
+
+  echo "Secret tls-${COMPONENT} created in namespace $NAMESPACE"
+done
+
+echo "All component certificates and secrets created."
+
+
+---
+
+7. Make the file executable and run it
+
+chmod +x ./generate-confluent-mtls-certs.sh
+
+./generate-confluent-mtls-certs.sh
+
+
+
+
+---
+
+8. Create a confluent-platform.yaml file with the following contents below
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KRaftController
+metadata:
+  name: kraftcontroller
+  namespace: confluent
+spec:
+  dataVolumeCapacity: 10G
+  image:
+    application: docker.io/confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  replicas: 3
+  tls:
+    secretRef: tls-kraftcontroller
+  listeners:
+    controller:
+      tls:
+        enabled: true
+      authentication:
+        type: mtls
+        principalMappingRules:
+          - RULE:.*CN[\\s]?=[\\s]?([a-zA-Z0-9.]*)?.*/$1/
+---  
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  tls:
+    secretRef: tls-kafka
+  listeners:
+    internal:
+      authentication:
+        type: mtls
+        principalMappingRules:
+          - RULE:.*CN[\\s]?=[\\s]?([a-zA-Z0-9.]*)?.*/$1/
+      tls:
+        enabled: true
+    external:
+      authentication:
+        type: mtls
+        principalMappingRules:
+          - RULE:.*CN[\\s]?=[\\s]?([a-zA-Z0-9.]*)?.*/$1/
+      tls:
+        enabled: true
+      externalAccess:
+        type: loadBalancer
+        loadBalancer:
+          domain: mydomain.example
+          brokerPrefix: b
+          bootstrapPrefix: kafka
+  metricReporter:
+    enabled: true
+    authentication:
+      type: mtls
+    tls:
+      enabled: true
+  dependencies:
+    kRaftController:
+      controllerListener:
+        tls:
+          enabled: true
+        authentication:
+          type: mtls
+      clusterRef:
+        name: kraftcontroller
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Connect
+metadata:
+  name: connect
+  namespace: confluent
+spec:
+  replicas: 2
+  image:
+    application: confluentinc/cp-server-connect:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  tls:
+    secretRef: tls-connect
+  authentication:
+    type: mtls
+  externalAccess:
+    type: loadBalancer
+    loadBalancer:
+      domain: mydomain.example
+      prefix: connect
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: SchemaRegistry
+metadata:
+  name: schemaregistry
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-schema-registry:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  tls:
+    secretRef: tls-schemaregistry
+  authentication:
+    type: mtls
+  externalAccess:
+    type: loadBalancer
+    loadBalancer:
+      domain: mydomain.example
+      prefix: schemaregistry
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaRestProxy
+metadata:
+  name: kafkarestproxy
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-kafka-rest:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  tls:
+    secretRef: tls-kafkarestproxy
+  authentication:
+    type: mtls
+  externalAccess:
+    type: loadBalancer
+    loadBalancer:
+      domain: mydomain.example
+      prefix: kafkarestproxy
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+    schemaRegistry:
+      url: https://schemaregistry.confluent.svc.cluster.local:8081
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KsqlDB
+metadata:
+  name: ksqldb
+  namespace: confluent
+spec:
+  replicas: 2
+  image:
+    application: confluentinc/cp-ksqldb-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  externalAccess:
+    type: loadBalancer
+    loadBalancer:
+      domain: mydomain.example
+      prefix: ksqldb
+  tls:
+    secretRef: tls-ksqldb
+  authentication:
+    type: mtls
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: ControlCenter
+metadata:
+  name: controlcenter
+  namespace: confluent
+spec:
+  replicas: 1
+  podTemplate:
+    probe:
+      liveness:
+        periodSeconds: 10
+        failureThreshold: 5
+        timeoutSeconds: 500
+  image:
+    application: confluentinc/cp-enterprise-control-center:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  externalAccess:
+    type: loadBalancer
+    loadBalancer:
+      domain: mydomain.example
+      prefix: controlcenter
+  tls:
+    secretRef: tls-controlcenter
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+    connect:
+      - name: connect
+        url:  https://connect.confluent.svc.cluster.local:8083
+        authentication:
+          type: mtls
+        tls:
+          enabled: true
+    ksqldb:
+      - name: ksqldb
+        url:  https://ksqldb.confluent.svc.cluster.local:8088
+        authentication:
+          type: mtls
+        tls:
+          enabled: true
+    schemaRegistry:
+      url: https://schemaregistry.confluent.svc.cluster.local:8081
+      authentication:
+        type: mtls
+      tls:
+        enabled: true
+
+
+
+
+
+
+9. Deploy the Confluent-platform yaml file 
+kubectl apply -f confluent-platform.yaml -n confluent
+
+
+
+10. Check for pods to be up and running 
+kubectl get pods -n confluent -w
+
+
+
+11. Once all the pods are up and running check for the secrets and pvcs that will be automatically created by the services
+kubectl get secrets -n confluent
+kubectl get pvc -n confluent
+
+
+
+12. Check if everything is working
+
+kubectl exec -it kafka-0 -n confluent -- bash
+
+
+
+Create a fiel to pass as a configuration 
+
+cat <<EOF > /tmp/client.properties
+security.protocol=SSL
+ssl.truststore.location=/tmp/kafka.truststore.jks
+ssl.truststore.password=mystorepassword
+ssl.keystore.location=/tmp/kafka.keystore.jks
+ssl.keystore.password=mystorepassword
+ssl.key.password=mystorepassword
+EOF
+
+
+
+Create a jks for all the components to use
+
+---  
+apiVersion: platform.confluent.io/v1beta1
+# Create truststore
+keytool -importcert \
+  -trustcacerts \
+  -alias CARoot \
+  -file /mnt/sslcerts/cacerts.pem \
+  -keystore /tmp/kafka.truststore.jks \
+  -storepass mystorepassword \
+  -noprompt
+
+# Create PKCS12 keystore first
+openssl pkcs12 -export \
+  -in /mnt/sslcerts/fullchain.pem \
+  -inkey /mnt/sslcerts/privkey.pem \
+  -out /tmp/kafka-keystore.p12 \
+  -name kafka \
+  -CAfile /mnt/sslcerts/cacerts.pem \
+  -caname root \
+  -password pass:mystorepassword
+
+# Convert to JKS keystore
+keytool -importkeystore \
+  -deststorepass mystorepassword \
+  -destkeypass mystorepassword \
+  -destkeystore /tmp/kafka.keystore.jks \
+  -srckeystore /tmp/kafka-keystore.p12 \
+  -srcstoretype PKCS12 \
+  -srcstorepass mystorepassword \
+  -alias kafka
+
+
+Check to see if everything is working fine
+
+kafka-topics.sh --bootstrap-server kafka.confluent.svc.cluster.local:9071 --command-config /tmp/client.properties -list
+
+
+To access the control center
+
+kubectl port-forward controlcenter-0 9021:9021 --namespace confluent
+
+https://localhost:9021
+
+
+
+14. CleanUp
+
+kubectl delete -f confluent-platform.yaml 
+
+helm uninstall operator -n confluent
+
+kind delete cluster --name cfk-mtls-cluster
+
+
+
+
+
+
+
+

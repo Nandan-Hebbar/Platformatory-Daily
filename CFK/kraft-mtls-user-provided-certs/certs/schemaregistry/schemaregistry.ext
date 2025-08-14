@@ -1,0 +1,11 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = schemaregistry
+DNS.2 = schemaregistry.confluent
+DNS.3 = schemaregistry.confluent.svc
+DNS.4 = schemaregistry.confluent.svc.cluster.local

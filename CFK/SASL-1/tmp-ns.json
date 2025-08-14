@@ -1,0 +1,59 @@
+{
+    "apiVersion": "v1",
+    "kind": "Namespace",
+    "metadata": {
+        "creationTimestamp": "2025-04-11T08:41:29Z",
+        "deletionTimestamp": "2025-04-14T06:04:08Z",
+        "labels": {
+            "kubernetes.io/metadata.name": "sasl-1"
+        },
+        "name": "sasl-1",
+        "resourceVersion": "148107",
+        "uid": "adf6e363-8919-4742-9ae4-80e425f78a4e"
+    },
+    "spec": {
+        "finalizers": [
+            "kubernetes"
+        ]
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2025-04-14T06:04:21Z",
+                "message": "All resources successfully discovered",
+                "reason": "ResourcesDiscovered",
+                "status": "False",
+                "type": "NamespaceDeletionDiscoveryFailure"
+            },
+            {
+                "lastTransitionTime": "2025-04-14T06:04:21Z",
+                "message": "All legacy kube types successfully parsed",
+                "reason": "ParsedGroupVersions",
+                "status": "False",
+                "type": "NamespaceDeletionGroupVersionParsingFailure"
+            },
+            {
+                "lastTransitionTime": "2025-04-14T06:04:21Z",
+                "message": "All content successfully deleted, may be waiting on finalization",
+                "reason": "ContentDeleted",
+                "status": "False",
+                "type": "NamespaceDeletionContentFailure"
+            },
+            {
+                "lastTransitionTime": "2025-04-14T06:04:21Z",
+                "message": "Some resources are remaining: connects.platform.confluent.io has 1 resource instances, controlcenters.platform.confluent.io has 1 resource instances, kafkarestproxies.platform.confluent.io has 1 resource instances, kafkas.platform.confluent.io has 1 resource instances, ksqldbs.platform.confluent.io has 1 resource instances, schemaregistries.platform.confluent.io has 1 resource instances, secrets. has 4 resource instances, zookeepers.platform.confluent.io has 1 resource instances",
+                "reason": "SomeResourcesRemain",
+                "status": "True",
+                "type": "NamespaceContentRemaining"
+            },
+            {
+                "lastTransitionTime": "2025-04-14T06:04:21Z",
+                "message": "Some content in the namespace has finalizers remaining: connect.finalizers.platform.confluent.io in 1 resource instances, controlcenter.finalizers.platform.confluent.io in 1 resource instances, kafka.finalizers.platform.confluent.io in 1 resource instances, kafkarestproxy.finalizers.platform.confluent.io in 1 resource instances, ksqldb.finalizers.platform.confluent.io in 1 resource instances, schemaregistry.finalizers.platform.confluent.io in 1 resource instances, secret.finalizers.platform.confluent.io/connect-connect in 1 resource instances, secret.finalizers.platform.confluent.io/controlcenter-controlcenter in 1 resource instances, secret.finalizers.platform.confluent.io/kafka-kafka in 3 resource instances, secret.finalizers.platform.confluent.io/kafkarestproxy-kafkarestproxy in 1 resource instances, secret.finalizers.platform.confluent.io/ksqldb-ksqldb in 1 resource instances, secret.finalizers.platform.confluent.io/schemaregistry-schemaregistry in 1 resource instances, zookeeper.finalizers.platform.confluent.io in 1 resource instances",
+                "reason": "SomeFinalizersRemain",
+                "status": "True",
+                "type": "NamespaceFinalizersRemaining"
+            }
+        ],
+        "phase": "Terminating"
+    }
+}

@@ -1,0 +1,13 @@
+version: '3.7'
+
+services:
+  ldap:
+    image: avinashupadhya99/example_com_openldap:1.0.0
+    container_name: custom-openldap
+    ports:
+      - "389:389"
+    environment:
+      LDAP_ORGANISATION: "Example Company"
+      LDAP_DOMAIN: "example.com"
+      LDAP_ADMIN_PASSWORD: "secret"
+    restart: unless-stopped

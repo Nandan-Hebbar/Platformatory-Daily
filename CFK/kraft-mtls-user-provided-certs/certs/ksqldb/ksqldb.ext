@@ -1,0 +1,11 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ksqldb
+DNS.2 = ksqldb.confluent
+DNS.3 = ksqldb.confluent.svc
+DNS.4 = ksqldb.confluent.svc.cluster.local

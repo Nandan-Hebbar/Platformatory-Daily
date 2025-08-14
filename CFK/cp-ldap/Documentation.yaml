@@ -1,0 +1,289 @@
+1. Create a kind-config file
+nano kind-config.yaml
+
+---
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30090
+        hostPort: 30090
+      - containerPort: 30093
+        hostPort: 30093
+      - containerPort: 30080
+        hostPort: 30080
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+
+---
+
+2. Create a kind cluster with the config file given below
+kind create cluster --name cfk-mtls-cluster --config kind-config.yaml
+
+
+
+3. Check the cluster info
+kubectl cluster-info --context kind-cfk-mtls-cluster
+
+
+
+4. Create a namespace 
+kubectl create namespace confluent
+
+
+
+5. Install Confluent For Kubernetes using Helm:
+helm upgrade --install operator confluentinc/confluent-for-kubernetes --namespace confluent
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KRaftController
+metadata:
+  name: kraftcontroller
+  namespace: confluent
+spec:
+  dataVolumeCapacity: 10G
+  image:
+    application: docker.io/confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  replicas: 3
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 100Gi
+  configOverrides:
+    log4j:
+      - log4j.rootLogger=INFO, stdout
+      - log4j.logger.io.confluent.kafka.security.auth=DEBUG
+      - log4j.logger.io.confluent.metadata=DEBUG
+      - log4j.logger.io.confluent.rest-utils=DEBUG
+      - log4j.logger.kafka.authorizer.logger=DEBUG
+      - log4j.logger.kafka.network=DEBUG
+  dependencies:
+    kRaftController:
+      clusterRef:
+        name: kraftcontroller
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Connect
+metadata:
+  name: connect
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-server-connect:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka:9071
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KsqlDB
+metadata:
+  name: ksqldb
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-ksqldb-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: ControlCenter
+metadata:
+  name: controlcenter
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-enterprise-control-center:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+
+  configOverrides:
+    log4j:
+      - log4j.rootLogger=DEBUG, stdout
+
+  authentication:
+    type: ldap
+    ldap:
+      roles: [Administrators, BackendDev, Developer, KafkaDev, KafkaAdmin]                                #Role Whitelisting
+      #restrictedRoles: [FrontendDev]                                                                     #Role Blacklisting                                                     
+      property:
+        useLdaps: "false"
+        debug: "true"
+        contextFactory: "com.sun.jndi.ldap.LdapCtxFactory"
+        hostname: "ldap.confluent.svc.cluster.local"
+        port: "389"
+
+        bindDn: "cn=admin,dc=example,dc=com"
+        bindPassword: "secret"
+        authenticationMethod: "simple"
+        forceBindingLogin: "false"
+
+        userBaseDn: "ou=users,dc=example,dc=com"
+        userObjectClass: "person"
+        userRdnAttribute: "cn"
+        userIdAttribute: "cn"
+        userSearchFilter: "(objectClass=person)"
+        userSearchScope: "2"
+
+        roleBaseDn: "ou=groups,dc=example,dc=com"
+        roleNameAttribute: "cn"
+        roleObjectClass: "groupOfNames"
+        roleMemberAttribute: "member"
+        roleMemberAttributePattern: "cn=([^,]+),ou=users,dc=example,dc=com"
+
+        searchPageSize: "1000"
+        ldapLoggerLevel: "DEBUG"
+
+  dependencies:
+    schemaRegistry:
+      url: http://schemaregistry.confluent.svc.cluster.local:8081
+    ksqldb:
+    - name: ksqldb
+      url: http://ksqldb.confluent.svc.cluster.local:8088
+    connect:
+    - name: connect
+      url: http://connect.confluent.svc.cluster.local:8083
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: SchemaRegistry
+metadata:
+  name: schemaregistry
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-schema-registry:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaRestProxy
+metadata:
+  name: kafkarestproxy
+  namespace: confluent
+spec:
+  dependencies:
+    schemaRegistry:
+      url: http://schemaregistry.confluent.svc.cluster.local:8081
+  image:
+    application: confluentinc/cp-kafka-rest:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  replicas: 1
+---
+
+
+
+6. Deploy the Confluent-platform yaml file 
+kubectl apply -f confluent-platform.yaml -n confluent
+
+
+
+
+7. Create a deployment to host the ldap server on your cluster
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldap
+  namespace: confluent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ldap
+  template:
+    metadata:
+      labels:
+        app: ldap
+    spec:
+      containers:
+        - name: ldap
+          image: avinashupadhya99/example_com_openldap:1.0.0
+          ports:
+            - containerPort: 389
+          env:
+            - name: LDAP_ORGANISATION
+              value: "Example Company"
+            - name: LDAP_DOMAIN
+              value: "example.com"
+            - name: LDAP_ADMIN_PASSWORD
+              value: "secret"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldap
+  namespace: confluent
+spec:
+  ports:
+    - port: 389
+      targetPort: 389
+      protocol: TCP
+  selector:
+    app: ldap
+---
+
+
+
+7. Deploy the ldap-deployment.yaml file 
+kubectl apply -f ldap-deployment.yaml -n confluent
+
+
+
+8. Check for pods to be up and running 
+kubectl get pods -n confluent -w
+ 
+
+
+9. Port forward the cluster ports to expose it for external use (Controlcenter and Ldap server ports)
+
+kubectl port-forward controlcenter-0 9021:9021 --namespace confluent
+
+kubectl port-forward svc/ldap 1389:389 -n confluent
+
+(You can see the logs of the c3 for ldap login at)
+kubectl logs controlcenter-0 -n confluent -f | grep -i ldap
+
+
+
+10. To access the control center
+
+https://localhost:9021
+
+
+Check and see if you can login to the controlcenter using the Username and Plaintext passowrd 
+
+
+
+11. CleanUp
+
+kubectl delete -f confluent-platform.yaml 
+
+helm uninstall operator -n confluent
+
+kind delete cluster --name cfk-mtls-cluster
+
+
+
+
+
+

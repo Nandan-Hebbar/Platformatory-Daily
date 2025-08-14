@@ -1,0 +1,11 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = connect
+DNS.2 = connect.confluent
+DNS.3 = connect.confluent.svc
+DNS.4 = connect.confluent.svc.cluster.local

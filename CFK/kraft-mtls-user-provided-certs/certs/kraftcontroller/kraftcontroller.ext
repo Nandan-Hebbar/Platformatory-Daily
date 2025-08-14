@@ -1,0 +1,14 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = kraftcontroller
+DNS.2 = kraftcontroller.confluent
+DNS.3 = kraftcontroller.confluent.svc
+DNS.4 = kraftcontroller.confluent.svc.cluster.local
+DNS.5 = kraftcontroller-0.kraftcontroller.confluent.svc.cluster.local
+DNS.6 = kraftcontroller-1.kraftcontroller.confluent.svc.cluster.local
+DNS.7 = kraftcontroller-2.kraftcontroller.confluent.svc.cluster.local
