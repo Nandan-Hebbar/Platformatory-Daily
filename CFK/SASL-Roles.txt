@@ -1,0 +1,268 @@
+1. Deploy Confluent for Kubernetes
+
+Set up the Helm Chart:
+helm repo add confluentinc https://packages.confluent.io/helm
+
+
+Install Confluent For Kubernetes using Helm:
+helm upgrade --install operator confluentinc/confluent-for-kubernetes --namespace=confluent
+
+Check that the Confluent For Kubernetes pod comes up and is running:
+kubectl get pods --namespace=confluent
+
+(you should see the confluent-operator pod up and running)
+
+
+
+2. Create .txt files to store the usernames and passwords for each service
+
+SERVER SIDE
+
+SECRETS_SASL/server-side/basicConnect.txt
+connectUser: 729999
+
+
+
+SECRETS_SASL/server-side/basicwithroleC3.txt
+c3admin: 729999,Administrators
+c3restricted: 729999,Restricted
+
+
+
+SECRETS_SASL/server-side/basicwithroleKSQL.txt
+ksqlUser: 729999,admin
+
+
+
+SECRETS_SASL/server-side/basicwithroleRP.txt
+restproxyUser: 729999,admin
+
+
+
+SECRETS_SASL/server-side/basicwithroleSR.txt
+srUser: 729999,admin
+
+
+
+
+CLIENT SIDE
+
+SECRETS_SASL/client-side/basicsecretConnect.txt
+username=connectUser
+password=729999
+
+
+
+SECRETS_SASL/client-side/basicsecretSR.txt
+username=srUser
+password=729999
+
+
+
+SECRETS_SASL/client-side/basicsecretksql.txt
+username=ksqlUser
+password=729999
+
+
+
+
+3. Create user login creds with their roles in the Secret manager
+
+
+Create Server-side basic authentication for Confluent components
+
+kubectl create secret generic basicsecretconnect --from-file=basic.txt=$SECRETS_SASL/server-side/basicConnect.txt --namespace confluent
+kubectl create secret generic basicwithrolesr --from-file=basic.txt=$SECRETS_SASL/server-side/basicwithroleSR.txt --namespace confluent
+kubectl create secret generic basicwithroleksql --from-file=basic.txt=$SECRETS_SASL/server-side/basicwithroleKSQL.txt --namespace confluent
+kubectl create secret generic basicwithrolec3 --from-file=basic.txt=$SECRETS_SASL/server-side/basicwithroleC3.txt --namespace confluent
+kubectl create secret generic basicwithrolerp --from-file=basic.txt=$SECRETS_SASL/server-side/basicwithroleRP.txt --namespace confluent
+
+
+Create Client-side basic authentication for Confluent components
+
+kubectl create secret generic basicsecretconnectclient --from-file=basic.txt=$TUTORIAL_HOME/client-side/basicsecretConnect.txt --namespace confluent
+kubectl create secret generic basicsecretsrclient --from-file=basic.txt=$TUTORIAL_HOME/client-side/basicsecretSR.txt --namespace confluent
+kubectl create secret generic basicsecretksqlclient --from-file=basic.txt=$TUTORIAL_HOME/client-side/basicsecretksql.txt --namespace confluent
+
+
+
+4. The following is a yaml file for simple SASL with role access
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Zookeeper
+metadata:
+  name: zookeeper
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-zookeeper:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  logVolumeCapacity: 10Gi
+  podTemplate:
+    podSecurityContext:
+      fsGroup: 1001
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  metricReporter:
+    enabled: true
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Connect
+metadata:
+  name: connect
+  namespace: confluent
+spec:
+  replicas: 1
+  authentication:
+    type: basic
+    basic:
+      secretRef: basicsecretconnect
+  image:
+    application: confluentinc/cp-server-connect:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka:9071
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: SchemaRegistry
+metadata:
+  name: schemaregistry
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-schema-registry:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  authentication:
+    type: basic
+    basic:
+      secretRef: basicwithrolesr
+      roles:
+        - admin
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KsqlDB
+metadata:
+  name: ksqldb
+  namespace: confluent
+spec:
+  replicas: 1
+  authentication:
+    type: basic
+    basic:
+      secretRef: basicwithroleksql
+      roles:
+        - admin
+  image:
+    application: confluentinc/cp-ksqldb-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaRestProxy
+metadata:
+  name: kafkarestproxy
+  namespace: confluent
+spec:
+  replicas: 1
+  authentication:
+    type: basic
+    basic:
+      secretRef: basicwithrolerp
+      roles:
+        - admin
+  image:
+    application: confluentinc/cp-kafka-rest:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: ControlCenter
+metadata:
+  name: controlcenter
+  namespace: confluent
+spec:
+  replicas: 1
+  authentication:
+    type: basic
+    basic:
+      secretRef: basicwithrolecc
+      roles:
+        - Administrators
+        - Restricted
+      restrictedRoles:
+        - Restricted
+  image:
+    application: confluentinc/cp-enterprise-control-center:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 10Gi
+  dependencies:
+    connect:
+      - name: connect
+        url: http://connect.confluent.svc.cluster.local:8083
+        authentication:
+          type: basic
+          basic:
+            secretRef: basicsecretconnectclient
+    ksqldb:
+    - name: ksqldb
+      url: http://ksqldb.confluent.svc.cluster.local:8088
+      authentication:
+        type: basic
+        basic:
+          secretRef: basicsecretksqlclient
+    schemaRegistry:
+      url: http://schemaregistry.confluent.svc.cluster.local:8081
+      authentication:
+        type: basic
+        basic:
+          secretRef: basicsecretsrclient
+
+
+
+5. Run the yaml file
+
+kubectl apply -f confluent-platform.yaml
+
+kubectl get pods -n confluent -w
+
+
+
+6. Check the configuration set by using the following command 
+
+kubectl --namespace=confluent exec -it connect-0 -- curl -u connectUser:729999 http://0.0.0.0:8083
+kubectl --namespace=confluent exec -it kafkarestproxy-0 -- curl -u restproxyUser:729999 http://localhost:8082/brokers
+
+Validate authentication with Control Center
+Set up port forwarding to Control Center web UI from local machine:
+
+kubectl port-forward controlcenter-0 9021:9021 --namespace=confluent
+Browse the Control Center using the url below:
+http://localhost:9021
+
+
+Login to the control center UI using any of the following users depending on the role you would like to use:
+
+Users:
+Full Control: Username:c3admin Password:729999
+Restricted Control: Username:c3restricted Password:729999
+
+
+
+
+
+
+
