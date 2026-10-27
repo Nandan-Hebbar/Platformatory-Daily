@@ -1,138 +1,144 @@
 ---
-name: Ticket 1 - CMF Native Operator Session Mode (Shared Compute Pools & SQL Statements)
-overview: Implement native Confluent Flink Session Mode in Fleet Manager using CMF Native Operator (platform.confluent.io/v1beta1) Shared Compute Pools (FlinkComputePool type SHARED) and streaming SQL statements (FlinkStatement). In Advance Configuration, whenever deployment mode is session mode, completely disables the Application JAR input and provides a first-class provision to accept Flink SQL Statements.
+name: Combined Ticket 1 - CMF Native Session Mode, SQL Job Submission & Server-Side Artifact Validation Engine
+overview: Unified implementation of Confluent Flink (CMF) Native Session Mode, SQL Job Submission, and the Server-Side JAR & Artifact Validation Engine. Session clusters are created as bare Shared Compute Pools (FlinkComputePool type SHARED) without workload inputs (JAR input disabled, no initial SQL prompt). SQL statements are accepted strictly via Job Submission (FlinkJobCreate) as FlinkStatement resources. Combines the full server-side JAR archive inspection engine (bytecode, manifest, and shading audits) and introduces foundational 'sql' artifact_kind support.
 todos:
-  - id: t1-backend-config-schema
-    content: Update core/views/flink/config.py to disable application_jar and add statement (SQL) in Advance Configuration for session mode
+  - id: t1-cmf-cluster-schema-serializers
+    content: Update config.py and serializers.py to create bare CMF session clusters (omit application_jar, require max_flink_units, no SQL input at cluster creation)
     status: pending
-  - id: t1-backend-serializers
-    content: Update core/serializers.py to allow CMF session mode, strictly reject application_jar, and accept/require SQL statement
+  - id: t1-cmf-job-schema-serializers
+    content: Update config.py and FlinkJobSerializer to accept SQL statement and forbid application_jar for CMF session jobs
     status: pending
-  - id: t1-backend-runtime-values
-    content: Update flink_components.py and flink_job_components.py to resolve FlinkComputePool and FlinkStatement values
+  - id: t1-helm-cfk-compute-pool
+    content: Update streamtime-flink-cfk to emit FlinkComputePool (computePoolType SHARED) in session mode and guard FlinkApplication
     status: pending
-  - id: t1-helm-cfk
-    content: Update streamtime-flink-cfk to emit FlinkComputePool (computePoolType SHARED) and bootstrap FlinkStatement in session mode
+  - id: t1-helm-session-job-statement
+    content: Update streamtime-flink-session-job to emit platform.confluent.io/v1beta1 FlinkStatement for CMF session jobs
     status: pending
-  - id: t1-helm-session-job
-    content: Update streamtime-flink-session-job to emit FlinkStatement pointing to flinkComputePoolRef for CMF session jobs
+  - id: t1-runtime-components
+    content: Update flink_components.py and flink_job_components.py to resolve compute pool sizing and FlinkStatement runtime values
     status: pending
-  - id: t1-frontend-create
-    content: Update FlinkCreate.js to unlock CMF session mode, disable Application JAR in Advance Configuration, and provide SQL Statements input
+  - id: t1-frontend-create-job-create
+    content: Update FlinkCreate.js (bare session pool, hide JAR/Project toggle) and FlinkJobCreate.js (hide JAR, render SQL textarea)
     status: pending
-  - id: t1-frontend-job-create
-    content: Update FlinkJobCreate.js to disable Application JAR and render SQL statement textarea for CMF session jobs
+  - id: t1-server-side-jar-validator
+    content: Implement core/services/flink_jar_archive.py (ZIP central directory inspection, bytecode version, MANIFEST Main-Class, shading audit)
+    status: pending
+  - id: t1-upload-handler-and-deploy-guards
+    content: Update flink_artifact_upload.py with JAR inspection spooling and add sql artifact_kind; update flink_project_deploy.py guards
     status: pending
   - id: t1-tests
-    content: Add unit, serializer, schema, Helm template, and frontend tests verifying SQL statements and JAR prohibition
+    content: Add comprehensive tests for session cluster sizing, SQL job submission, JAR upload inspection, and Helm template rendering
     status: pending
 isProject: false
 ---
 
-# Ticket 1: CMF Native Operator Session Mode (Shared Compute Pools & SQL Statements)
+# Combined Ticket 1: CMF Native Session Mode, SQL Job Submission & Server-Side Artifact Validation Engine
 
-## 1. Architectural Baseline & Rules
+## 1. Context & Architectural Decisions
 
-Confluent Manager for Apache Flink (CMF) natively runs on the **Confluent for Kubernetes (CFK) Native Operator** (`platform.confluent.io/v1beta1`):
-
-1. **Application Mode (`mode: "application"`)**:
-   - Deploys a dedicated **`FlinkApplication`** custom resource.
-   - Sized per job via `flink_units`.
-   - Requires a packaged Java/Scala JAR (`application_jar` / `jarURI`) or Python artifact.
-   - Manages its own isolated TaskManager pods and lifecycle.
-
-2. **Session Mode (`mode: "session"`)**:
-   - Deploys a shared, long-running **`FlinkComputePool`** custom resource with **`computePoolType: SHARED`**.
-   - Sized via `max_flink_units` (the cluster capacity pool of TaskManager slots).
-   - **Exclusively executes continuous Flink SQL statements (`FlinkStatement`)**.
-   - Custom JAR applications are **NOT supported** on Shared Compute Pools by Confluent design; custom JARs must run in dedicated Application Mode (`FlinkApplication`).
-
-3. **Advance Configuration Enforcement**:
-   - **Whenever Deployment Mode is `session`**:
-     - **Disable Application JAR Input**: The `application_jar` field, entry class, application arguments, and the JAR/Project source toggle must be completely **disabled and removed** from the Advance Configuration form.
-     - **Provision to Accept SQL Statements**: A first-class, multiline **Flink SQL Statements** input (`statement`) must be provided in Advance Configuration, allowing users to supply initial streaming SQL queries, DDL, or continuous pipelines (e.g., `CREATE TABLE ...`, `INSERT INTO ... SELECT ...`).
-   - **Whenever submitting child jobs to a CMF Session Cluster (`mode: "session-job"`)**:
+Following manager guidance and platform architectural alignment:
+1. **Cluster Creation (`FlinkCreate.js`)**:
+   - In Session Mode (`Job Workspace`), a Flink cluster represents a **shared infrastructure pool** (`platform.confluent.io/v1beta1` **`FlinkComputePool`** with `computePoolType: SHARED`).
+   - Sized via `max_flink_units` (Task Manager slot pool capacity).
+   - **No Workload Code at Cluster Creation**:
+     - **Application JAR is disabled/hidden**: CMF Shared Compute Pools cannot run JAR files.
+     - **No SQL statement submission at cluster creation**: The compute pool is created clean and bare. SQL is submitted later.
+2. **Workload Submission (`FlinkJobCreate.js`)**:
+   - All continuous streaming SQL workloads are submitted as **Session Jobs** (`platform.confluent.io/v1beta1` **`FlinkStatement`**).
+   - For CMF session clusters:
      - The Application JAR input is **disabled/hidden**.
-     - A dedicated **Flink SQL Statement** input is rendered for the `FlinkStatement` submission.
+     - A dedicated **Flink SQL Statement** textarea is rendered.
+3. **Combined Scope with Ticket 2 (Server-Side Validation Engine)**:
+   - Sizing and combining Ticket 1 and Ticket 2 establishes a complete, robust boundary for CMF workloads:
+     - **Java/Scala JAR Validation (`core/services/flink_jar_archive.py`)**: Server-side inspection of uploaded JARs (bytecode version, `MANIFEST.MF` `Main-Class`, and rejecting unshaded `org.apache.flink.*` core classes).
+     - **Session Workload Validation**: Rejecting JAR submissions to session clusters and validating SQL statement payloads.
+     - **Flink Projects SQL Foundation**: Adding `'sql'` to `ARTIFACT_KIND_CHOICES` in `core/models.py`.
 
 ```mermaid
 flowchart TD
-    subgraph UICluster ["Step 1 & Step 3: FlinkCreate.js (Cluster Creation)"]
-        ModeRadio["Deployment Mode Selector"]
-        ModeRadio -->|Session Mode / Job Workspace| AdvConfig["Step 3: Advance Configuration"]
-        AdvConfig -->|DISABLED & HIDDEN| NoJAR["Application JAR Input<br/>(application_jar, args, entry_class)"]
-        AdvConfig -->|PROVISIONED & ENABLED| SQLInput["Flink SQL Statements Input<br/>(statement: DDL / INSERT INTO)"]
-        AdvConfig --> PoolSizing["Shared Compute Pool Sizing<br/>(max_flink_units)"]
-    end
-
-    subgraph BackendCluster ["Backend Processing"]
+    subgraph ClusterCreation ["Cluster Creation: FlinkCreate.js"]
+        ModeSelect["Select Deployment Mode: Session Mode (Job Workspace)"]
+        AdvConfig["Step 3: Advance Configuration"]
+        ModeSelect --> AdvConfig
+        AdvConfig -->|DISABLED| NoJAR["No Application JAR Input"]
+        AdvConfig -->|DEFERRED| NoSQLInit["No SQL Input at Cluster Creation"]
+        AdvConfig --> PoolSizing["Configure Infrastructure:<br/>max_flink_units, flink_conf, image, license"]
         PoolSizing --> FCP["platform.confluent.io/v1beta1 FlinkComputePool<br/>computePoolType: SHARED"]
-        SQLInput --> FStmtInit["platform.confluent.io/v1beta1 FlinkStatement<br/>(Initial / Bootstrap Statement)"]
-        NoJAR --> SerializerValidation["Serializer Validation:<br/>Reject if application_jar is present"]
     end
 
-    subgraph UIJobs ["Subsequent Job Submission: FlinkJobCreate.js"]
+    subgraph JobSubmission ["Workload Submission: FlinkJobCreate.js"]
         JobForm["Submit Job to Session Cluster"]
-        JobForm -->|DISABLED| NoJobJAR["Application JAR Input"]
-        JobForm -->|ENABLED| JobSQL["Flink SQL Statement Textarea"]
-        JobSQL --> FStmtJob["platform.confluent.io/v1beta1 FlinkStatement<br/>spec.flinkComputePoolRef -> FCP"]
+        JobForm -->|DISABLED| NoJobJAR["Application JAR Input Hidden"]
+        JobForm -->|ENABLED| SQLField["Flink SQL Statement Input (Textarea)"]
+        SQLField --> FStmt["platform.confluent.io/v1beta1 FlinkStatement<br/>spec.flinkComputePoolRef -> FCP"]
+    end
+
+    subgraph ValidationEngine ["Server-Side Validation Engine"]
+        JARUpload["JAR Upload (Application Mode)"] --> JARValidator["core/services/flink_jar_archive.py<br/>- Manifest Main-Class<br/>- Bytecode Class Version (Java 17)<br/>- Shading Audit (No org.apache.flink.*)"]
+        SQLSubmit["SQL Submission (Session Mode)"] --> SQLValidator["SQL Sanity Check<br/>- Non-empty statement<br/>- Reject JAR payloads"]
     end
 ```
 
 ---
 
-## 2. In Scope vs. Out of Scope
+## 2. In Scope
 
-### In Scope
+### Part A: CMF Native Session Cluster (Bare Compute Pool)
 - **Advance Configuration Schema (`core/views/flink/config.py`)**:
   - In `build_config`, when `mode == "session"`:
-    - Omit `application_jar`, `application_args`, `entry_class`, `python_entry_file`.
-    - Provide `statement` in schema as a multiline SQL statement textarea with title `"Flink SQL Statements"`.
-  - When `mode == "session-job"` and `is_cmf`:
-    - Omit `application_jar`.
-    - Require `statement` (Flink SQL query).
+    - Omit `application_jar`, `entry_class`, `application_args`, `python_entry_file`.
+    - Do **not** prompt for SQL statements (cluster is created bare).
+    - Provide infrastructure fields: `parallelism`, `taskmanager_replicas` (derived from FU), `license`, `image`, `kafka`, `flink_conf`.
 - **Backend Serializers (`core/serializers.py`)**:
   - `FlinkSerializer.validate`:
-    - Allow `provider == "cmf"` with `mode == "session"`.
-    - Require `max_flink_units` for CMF session clusters.
-    - Strictly reject `application_jar` if passed when `mode == "session"`.
-    - Accept optional initial `statement` in `advanced_configuration`.
-  - `FlinkJobSerializer.validate`:
-    - Strictly reject `application_jar` on CMF session jobs.
-    - Require non-empty `statement`.
-- **Backend Runtime Values**:
-  - `core/services/flink_components.py`: Set `runtime["flink"]["mode"] = "session"`, strip `application_jar`, pass `statement` if present, size TaskManagers via `max_flink_units`.
-  - `core/services/flink_job_components.py`: Set `job.provider = "cmf"`, `job.clusterName = flink.identifier`, `job.statement = adv_dict.get("statement")`.
-- **Helm Charts**:
-  - `charts/streamtime-flink-cfk`:
-    - `templates/flink-compute-pool.yaml`: Emits `platform.confluent.io/v1beta1` `FlinkComputePool` with `computePoolType: SHARED`.
-    - `templates/flink-statement.yaml`: Emits bootstrap `FlinkStatement` if `statement` is provided in session mode.
-    - `templates/flink-application.yaml`: Rendered only when `mode == "application"`.
-  - `charts/streamtime-flink-session-job`:
-    - `templates/flinksessionjob.yaml`: Emits `platform.confluent.io/v1beta1` `FlinkStatement` when `.Values.job.provider == "cmf"`.
-- **Frontend UI**:
-  - `FlinkCreate.js`:
-    - Unlock "Job Workspace" radio button for CMF.
-    - In Advance Configuration step, whenever `mode === "session"`:
-      - Hide `ApplicationSourceToggle` (JAR vs Project).
-      - Ensure `application_jar` is disabled/hidden.
-      - Render provision for **Flink SQL Statements** (multiline editor/textarea).
-  - `FlinkJobCreate.js`:
-    - Hide Application JAR and Project selector for CMF session clusters.
-    - Render SQL statement textarea for session jobs.
+    - Lift CMF session mode block.
+    - Require `max_flink_units` (and reject `flink_units`).
+    - Strictly reject `application_jar` if passed in `advanced_configuration` when `mode == "session"`.
+- **Backend Runtime Values (`core/services/flink_components.py`)**:
+  - Set `runtime["flink"]["mode"] = "session"`.
+  - Strip `application_jar`.
+  - Map `max_flink_units` to TaskManager replicas/resources and set `compute_pool_type = "SHARED"`.
+- **Helm Chart (`charts/streamtime-flink-cfk`)**:
+  - `templates/flink-compute-pool.yaml`: Emits `platform.confluent.io/v1beta1` `FlinkComputePool` (`computePoolType: SHARED`) when `eq .Values.flink.mode "session"`.
+  - `templates/flink-application.yaml`: Guarded to render only when `eq .Values.flink.mode "application"`.
+- **Frontend UI (`FlinkCreate.js`)**:
+  - Unlock "Job Workspace" radio button for CMF.
+  - In Step 3 (Advance Configuration):
+    - Hide `ApplicationSourceToggle` when `mode === "session"`.
+    - Fallback schema omits `application_jar`.
 
-### Out of Scope
-- Server-side bytecode archive inspection for unshaded JARs (handled in [Ticket 2](file:///home/nandan-plf/.gemini/antigravity-ide/brain/8385735f-358b-4940-9dc6-fea33a43c76c/ticket_2_server_side_jar_validation.md)).
-- CMF REST Artifact Management Service and `cmf://` URI scheme (handled in [Ticket 3](file:///home/nandan-plf/.gemini/antigravity-ide/brain/8385735f-358b-4940-9dc6-fea33a43c76c/ticket_3_cmf_artifact_management_service.md)).
-- Advanced Monaco SQL editor with syntax highlighting, auto-complete, and schema tree (handled in [Ticket 4](file:///home/nandan-plf/.gemini/antigravity-ide/brain/8385735f-358b-4940-9dc6-fea33a43c76c/ticket_4_cmf_sql_shared_compute_pools.md)).
+### Part B: CMF SQL Job Submission
+- **Schema & Validation**:
+  - In `core/views/flink/config.py`: When `mode == "session-job"` and `is_cmf`, omit `application_jar` and require `statement`.
+  - In `core/serializers.py` (`FlinkJobSerializer.validate`): When parent is CMF, reject `application_jar` and require non-empty `statement`.
+- **Runtime Values & Helm Chart**:
+  - In `core/services/flink_job_components.py`: Set `job.provider = "cmf"`, `job.clusterName = flink.identifier`, `job.statement = adv_dict.get("statement")`.
+  - In `charts/streamtime-flink-session-job/templates/flinksessionjob.yaml`: Emit `platform.confluent.io/v1beta1` `FlinkStatement` referencing `spec.flinkComputePoolRef`.
+- **Frontend UI (`FlinkJobCreate.js`)**:
+  - When parent is CMF: hide JAR upload and render multiline Flink SQL statement input.
+
+### Part C: Server-Side JAR Validation Engine
+- **Service (`core/services/flink_jar_archive.py`)**:
+  - Inspects Java/Scala JAR archives via ZIP central directory without expanding on disk.
+  - Path traversal & zip-bomb safety checks.
+  - Reads `META-INF/MANIFEST.MF` to extract `Main-Class` and `Program-Class`, verifying the `.class` file exists.
+  - Detects Java bytecode major class version (header `0xCAFEBABE`, bytes 6-7) to verify JVM compatibility (`52` -> Java 8, `55` -> Java 11, `61` -> Java 17, `65` -> Java 21).
+  - Shading audit: Rejects JARs packaging core `org/apache/flink/*` classes (`flink-core`, `flink-streaming-java`, `flink-runtime`).
+  - Connector detection (`org/apache/flink/connector/*`).
+- **Integration**:
+  - Schema: Add `FlinkJarManifestSchema` in `core/schemas/flink_project_schema.py`.
+  - Upload Handler: Update `core/services/flink_artifact_upload.py` to spool JAR uploads up to 16 MiB for central directory inspection and persist derived manifest into `FlinkProjectVersion.manifest`.
+  - Deployment Guards: Update `core/services/flink_project_deploy.py` to check Java bytecode version compatibility and entrypoint presence.
+
+### Part D: Flink Projects SQL Foundation
+- In `core/models.py`: Add `('sql', 'Flink SQL script')` to `ARTIFACT_KIND_CHOICES`.
+- In `core/services/flink_artifact_upload.py`: Add `.sql` to allowed extensions under `ARTIFACT_KINDS["sql"]`.
 
 ---
 
 ## 3. Detailed Technical Changes by File
 
 ### 3.1 Backend Configuration Schema: [`core/views/flink/config.py`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-backend/core/views/flink/config.py)
-
-Update `build_config` to govern schema generation for Advance Configuration based on `mode`:
 
 ```python
     @staticmethod
@@ -169,27 +175,15 @@ Update `build_config` to govern schema generation for Advance Configuration base
                 "minimum": 1,
             }
 
-        # --- ADVANCE CONFIGURATION RULES BY MODE ---
+        # --- WORKLOAD & JAR RULES BY MODE ---
         if mode == "session":
-            # SESSION MODE (Cluster Level):
-            # 1. Disable / omit Application JAR inputs entirely.
-            # 2. Provide provision to accept Flink SQL Statements.
-            properties["statement"] = {
-                "type": "string",
-                "title": "Flink SQL Statements",
-                "description": "Optional continuous streaming SQL statements or DDL to execute on the Shared Compute Pool (e.g., CREATE TABLE ..., INSERT INTO ... SELECT ...).",
-            }
-            ui_schema["statement"] = {
-                "ui:widget": "textarea",
-                "ui:options": {
-                    "rows": 6,
-                    "placeholder": "-- Enter continuous Flink SQL statements\nCREATE TABLE sink_table (\n  id STRING,\n  cnt BIGINT\n) WITH (\n  'connector' = 'kafka',\n  ...\n);\n\nINSERT INTO sink_table SELECT id, COUNT(*) FROM source_table GROUP BY id;",
-                },
-            }
+            # BARE SESSION CLUSTER:
+            # Omit Application JAR inputs entirely.
+            # Do NOT prompt for SQL statements (submitted later via jobs).
+            pass
         elif mode == "session-job" and is_cmf:
-            # SESSION JOB (CMF):
-            # 1. Disable Application JAR.
-            # 2. Require Flink SQL Statement.
+            # CMF SESSION JOB:
+            # Disable Application JAR; require Flink SQL Statement.
             properties["statement"] = {
                 "type": "string",
                 "title": "Flink SQL Statement",
@@ -209,24 +203,23 @@ Update `build_config` to govern schema generation for Advance Configuration base
                 "application_jar": {
                     "type": "string",
                     "title": "Application JAR Path",
-                    "description": "Path or URL to the Flink application JAR (e.g. local:///opt/flink/examples/streaming/StateMachineExample.jar).",
+                    "description": "Path or URL to the Flink application JAR.",
                 },
                 "entry_class": {
                     "type": "string",
                     "title": "Entry Class",
-                    "description": "Optional main entrypoint class name if the JAR contains multiple main classes.",
+                    "description": "Optional main entrypoint class name.",
                 },
                 "python_entry_file": {
                     "type": "string",
                     "title": "Python File",
-                    "description": "For a Python version: the file that starts the job, relative to the top of the zip.",
+                    "description": "For a Python version: the file that starts the job.",
                 },
                 "application_args": {
                     "type": "array",
                     "title": "Application Arguments",
                     "items": {"type": "string"},
                     "default": [],
-                    "description": "Arguments to pass to the Flink application.",
                 },
                 **properties,
             }
@@ -278,18 +271,17 @@ Update `build_config` to govern schema generation for Advance Configuration base
 #### 1. In `FlinkSerializer.validate` (Cluster Level):
 - Remove restriction blocking `provider == "cmf"` and `mode == "session"` (lines 7998–8002).
 - When `mode == "session"`:
-  - Enforce `max_flink_units` is provided; forbid `flink_units`.
+  - Enforce `max_flink_units` is set; forbid `flink_units`.
   - **Strictly reject `application_jar`**:
     ```python
     jar = adv_config.get("application_jar") if isinstance(adv_config, dict) else getattr(adv_config, "application_jar", None)
     if jar:
         raise serializers.ValidationError(
-            {"advanced_configuration": {"application_jar": "Application JAR input is disabled in Session Mode. CMF session clusters run Flink SQL statements."}}
+            {"advanced_configuration": {"application_jar": "Application JAR input is disabled in Session Mode. CMF session clusters run Flink SQL statements via job submissions."}}
         )
     ```
-  - Allow `statement` (optional SQL statement) in `advanced_configuration`.
 
-#### 2. In `FlinkJobSerializer.validate` (Job Submission Level):
+#### 2. In `FlinkJobSerializer.validate` (Job Level):
 ```python
         flink = self.context.get("flink")
         adv_config = attrs.get("advanced_configuration", getattr(self.instance, "advanced_configuration", None))
@@ -309,41 +301,116 @@ Update `build_config` to govern schema generation for Advance Configuration base
 
 ---
 
-### 3.3 Backend Runtime Values Resolution
+### 3.3 Server-Side JAR Validation Service: [`core/services/flink_jar_archive.py`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-backend/core/services/flink_jar_archive.py) (New Service)
 
-#### 1. In [`core/services/flink_components.py`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-backend/core/services/flink_components.py):
-In `_build_runtime_values`:
-```python
-        if flink.provider == "cmf" and flink.mode == "session":
-            runtime["flink"]["mode"] = "session"
-            # Ensure application_jar is omitted from chart values
-            runtime["flink"].pop("application_jar", None)
-            
-            # Pass initial SQL statement if provided in Advance Configuration
-            if adv_dict.get("statement"):
-                runtime["flink"]["statement"] = adv_dict.get("statement")
-                
-            # Compute TaskManager sizing from max_flink_units
-            max_fu = flink.max_flink_units or 1
-            runtime["flink"]["taskmanager_replicas"] = max_fu
-            runtime["flink"]["compute_pool_type"] = "SHARED"
-```
+Inspects Java/Scala JAR archives safely by reading the ZIP central directory from a seekable stream:
 
-#### 2. In [`core/services/flink_job_components.py`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-backend/core/services/flink_job_components.py):
-In `_build_runtime_values`:
 ```python
-        if flink.provider == "cmf":
-            runtime["job"]["provider"] = "cmf"
-            runtime["job"]["clusterName"] = flink.identifier
-            runtime["job"]["statement"] = adv_dict.get("statement", "")
-            runtime["job"].pop("applicationJar", None)
+import io
+import re
+import struct
+import zipfile
+from typing import Dict, Any, List, Optional
+from core.schemas.flink_project_schema import FlinkJarManifestSchema
+
+MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+MAX_ENTRIES = 50_000
+
+# Bytecode versions: 52 = Java 8, 55 = Java 11, 61 = Java 17, 65 = Java 21
+BYTECODE_MAP = {52: "8", 55: "11", 61: "17", 65: "21"}
+
+FORBIDDEN_SHADED_PACKAGES = (
+    "org/apache/flink/core/",
+    "org/apache/flink/streaming/api/",
+    "org/apache/flink/runtime/",
+    "org/apache/flink/table/api/",
+)
+
+def inspect_flink_jar_archive(fp: io.BufferedIOBase) -> FlinkJarManifestSchema:
+    """Inspects a JAR archive without extracting to disk."""
+    if not zipfile.is_zipfile(fp):
+        raise ValueError("File is not a valid ZIP/JAR archive.")
+
+    fp.seek(0)
+    with zipfile.ZipFile(fp, "r") as zf:
+        infolist = zf.infolist()
+        if len(infolist) > MAX_ENTRIES:
+            raise ValueError(f"JAR exceeds maximum entry limit ({len(infolist)} > {MAX_ENTRIES}).")
+
+        total_size = sum(info.file_size for info in infolist)
+        if total_size > MAX_UNCOMPRESSED_BYTES:
+            raise ValueError("JAR uncompressed size exceeds limit (potential zip bomb).")
+
+        main_class = None
+        program_class = None
+        max_bytecode = 0
+        total_classes = 0
+        detected_connectors = set()
+        class_files = set()
+
+        for info in infolist:
+            name = info.filename
+            if name.startswith("/") or ".." in name or "\\" in name:
+                raise ValueError(f"Path traversal detected in archive: {name}")
+
+            if name == "META-INF/MANIFEST.MF":
+                manifest_data = zf.read(info).decode("utf-8", errors="replace")
+                main_class = _extract_manifest_key(manifest_data, "Main-Class")
+                program_class = _extract_manifest_key(manifest_data, "Program-Class")
+
+            elif name.endswith(".class"):
+                total_classes += 1
+                class_files.add(name)
+
+                # Shading audit: Detect bundled core Flink classes
+                for forbidden in FORBIDDEN_SHADED_PACKAGES:
+                    if name.startswith(forbidden):
+                        raise ValueError(
+                            f"The uploaded JAR contains bundled core Flink class '{name}'. "
+                            "Mark Flink dependencies as 'provided' in your build configuration."
+                        )
+
+                # Connector detection
+                if name.startswith("org/apache/flink/connector/"):
+                    parts = name.split("/")
+                    if len(parts) > 4:
+                        detected_connectors.add(parts[4])
+
+                # Bytecode check on sample of classes
+                if max_bytecode < 65 and total_classes <= 200:
+                    with zf.open(info) as cf:
+                        magic = cf.read(4)
+                        if magic == b"\xca\xfe\xba\xbe":
+                            _minor, major = struct.unpack(">HH", cf.read(4))
+                            if major > max_bytecode:
+                                max_bytecode = major
+
+        # If Main-Class specified, verify presence
+        if main_class:
+            expected_class = main_class.replace(".", "/") + ".class"
+            if expected_class not in class_files:
+                raise ValueError(f"Manifest specifies Main-Class '{main_class}', but class file was not found in JAR.")
+
+        java_ver = BYTECODE_MAP.get(max_bytecode, f"Java-bytecode-{max_bytecode}")
+        return FlinkJarManifestSchema(
+            main_class=main_class,
+            program_class=program_class,
+            bytecode_version=max_bytecode or 61,
+            java_version=java_ver,
+            detected_connectors=sorted(list(detected_connectors)),
+            total_classes=total_classes,
+        )
+
+def _extract_manifest_key(manifest_str: str, key: str) -> Optional[str]:
+    match = re.search(rf"^{key}:\s*(.+)$", manifest_str, re.MULTILINE | re.IGNORECASE)
+    return match.group(1).strip() if match else None
 ```
 
 ---
 
 ### 3.4 Helm Charts
 
-#### 1. Create `charts/streamtime-flink-cfk/templates/flink-compute-pool.yaml`:
+#### 1. `charts/streamtime-flink-cfk/templates/flink-compute-pool.yaml`:
 ```yaml
 {{- if eq .Values.flink.mode "session" }}
 apiVersion: platform.confluent.io/v1beta1
@@ -388,43 +455,7 @@ spec:
 {{- end }}
 ```
 
-#### 2. Create `charts/streamtime-flink-cfk/templates/flink-statement.yaml`:
-Deploys the initial/bootstrap SQL statement if provided in Advance Configuration:
-```yaml
-{{- if and (eq .Values.flink.mode "session") .Values.flink.statement }}
-apiVersion: platform.confluent.io/v1beta1
-kind: FlinkStatement
-metadata:
-  name: {{ .Release.Name }}-init-stmt
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/name: {{ .Chart.Name }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-spec:
-  flinkEnvironmentRef:
-    name: {{ .Values.flink.flink_environment | default .Release.Name }}
-  flinkComputePoolRef:
-    name: {{ .Release.Name }}
-  statement: {{ .Values.flink.statement | quote }}
-  computePoolAllocation:
-    parallelism: {{ .Values.flink.parallelism | default 1 }}
-{{- end }}
-```
-
-#### 3. Guard `charts/streamtime-flink-cfk/templates/flink-application.yaml`:
-```diff
-- apiVersion: platform.confluent.io/v1beta1
-- kind: FlinkApplication
-+ {{- if eq .Values.flink.mode "application" }}
-+ apiVersion: platform.confluent.io/v1beta1
-+ kind: FlinkApplication
-  metadata:
-    name: {{ .Release.Name }}
-...
-+ {{- end }}
-```
-
-#### 4. Update `charts/streamtime-flink-session-job/templates/flinksessionjob.yaml`:
+#### 2. `charts/streamtime-flink-session-job/templates/flinksessionjob.yaml`:
 ```yaml
 {{- if eq .Values.job.provider "cmf" }}
 apiVersion: platform.confluent.io/v1beta1
@@ -454,74 +485,16 @@ kind: FlinkSessionJob
 ### 3.5 Frontend UI Updates
 
 #### 1. [`FlinkCreate.js`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-frontend/src/features/flink/FlinkCreate.js):
-
-- **Enable "Job Workspace" for CMF** (lines 1421–1455):
-  Remove `formik.values.workload === "cmf"` disabled check and tooltip restriction.
-- **Advance Configuration Form (Step 3)**:
-  - When `formik.values.mode === "session"`:
-    - **Do NOT render `ApplicationSourceToggle`** (lines 1758–1779: only rendered when `mode === "application"`).
-    - If `application_source` or `application_jar` exists in form values, clear/omit it on save.
-    - Render the provision to accept SQL Statements via SchemaForm (`ui:widget: "textarea"` for `statement`) or fallback schema.
-  - In `fallbackProps` (lines 863–885):
-    ```javascript
-    const fallbackProps = {
-      ...(values.mode === "session" ? {
-        statement: {
-          type: "string",
-          title: "Flink SQL Statements",
-          description: "Optional continuous streaming SQL statements or DDL to execute on the Shared Compute Pool.",
-        },
-      } : {
-        application_jar: {
-          type: "string",
-          title: "Application JAR Path",
-        },
-        application_args: {
-          type: "array",
-          title: "Application Arguments",
-          items: { type: "string" },
-          default: [],
-        },
-      }),
-      ...(values.workload === "cmf" ? {
-        license: {
-          type: "string",
-          title: "Confluent License Key",
-        },
-      } : {}),
-      parallelism: { type: "integer", title: "Parallelism", default: 1 },
-      taskmanager_replicas: { type: "integer", title: "TaskManager Replicas", default: 1 },
-      upgrade_mode: { type: "string", title: "Upgrade Mode", enum: ["stateless", "savepoint", "last-state"], default: "stateless" },
-      flink_conf: { ... },
-    };
-    ```
+- Unlock "Job Workspace" for CMF (remove disabled state and tooltip restriction).
+- In Step 3 (Advance Configuration):
+  - Do NOT render `ApplicationSourceToggle` when `mode === "session"`.
+  - Fallback schema omits `application_jar` when `mode === "session"`.
+  - Cluster is saved cleanly without prompting for SQL statements.
 
 #### 2. [`FlinkJobCreate.js`](file:///home/nandan-plf/streamtime/flink-cmf-session/fleet-manager/fleet-manager-frontend/src/features/flink/FlinkJobCreate.js):
-
 - When `flinkCluster?.provider === "cmf"`:
-  - Hide the `ApplicationSourceToggle` and `application_jar` inputs.
-  - Render a dedicated multiline **Flink SQL Statement** input:
-    ```jsx
-    {isCMF ? (
-      <Box sx={{ my: 2 }}>
-        <TextField
-          name="statement"
-          label="Flink SQL Statement"
-          multiline
-          rows={6}
-          fullWidth
-          required
-          placeholder="INSERT INTO sink_topic SELECT * FROM source_topic;"
-          helperText="Continuous streaming Flink SQL statement executed on the Shared Compute Pool."
-          value={advancedConfig?.statement || ""}
-          onChange={(e) => setAdvancedConfig((prev) => ({ ...prev, statement: e.target.value }))}
-          InputProps={{ sx: { fontFamily: "monospace", fontSize: "0.9rem" } }}
-        />
-      </Box>
-    ) : (
-      /* Standard JAR / Project selector for Apache Flink */
-    )}
-    ```
+  - Hide JAR upload and Project selector.
+  - Render dedicated multiline Flink SQL Statement textarea with monospace font.
 
 ---
 
@@ -529,38 +502,13 @@ kind: FlinkSessionJob
 
 | Component | Test Case | Target Assertion |
 |---|---|---|
-| **Backend Serializer** | Create CMF session cluster with `max_flink_units=4` | `FlinkSerializer.validate` succeeds, sets `mode="session"`. |
-| **Backend Serializer** | Create CMF session cluster with `application_jar="a.jar"` | `ValidationError`: `Application JAR input is disabled in Session Mode.` |
-| **Backend Serializer** | Create CMF session cluster with `statement="CREATE TABLE ..."` | `FlinkSerializer.validate` succeeds, stores `statement` in `advanced_configuration`. |
-| **Backend Serializer** | Submit job to CMF session cluster with `statement="INSERT INTO ..."` | `FlinkJobSerializer.validate` succeeds. |
-| **Backend Serializer** | Submit job to CMF session cluster with `application_jar="job.jar"` | `ValidationError`: `CMF session clusters only accept Flink SQL statements. Application JAR is disabled.` |
-| **Config Schema API** | `POST /api/v1/workloads/flink/configuration-schema/` with `mode=session&workload=cmf` | `schema.properties.application_jar` is **absent**; `schema.properties.statement` is **present** with `ui:widget: "textarea"`. |
-| **Config Schema API** | `POST /api/v1/workloads/flink/configuration-schema/` with `mode=session-job&workload=cmf` | `schema.properties.application_jar` is **absent**; `schema.properties.statement` is **required**. |
+| **Cluster Serializer** | Create CMF session cluster with `max_flink_units=4` | `FlinkSerializer.validate` succeeds, sets `mode="session"`. |
+| **Cluster Serializer** | Create CMF session cluster with `application_jar="app.jar"` | `ValidationError`: `Application JAR input is disabled in Session Mode.` |
+| **Job Serializer** | Submit job to CMF session cluster with `statement="INSERT INTO ..."` | `FlinkJobSerializer.validate` succeeds, resolves `FlinkStatement`. |
+| **Job Serializer** | Submit job to CMF session cluster with `application_jar="job.jar"` | `ValidationError`: `CMF session clusters only accept Flink SQL statements.` |
+| **Config Schema API** | Call configuration-schema with `mode=session&workload=cmf` | `properties.application_jar` is **absent**; no `statement` prompt at cluster creation. |
+| **Config Schema API** | Call configuration-schema with `mode=session-job&workload=cmf` | `properties.application_jar` is **absent**; `properties.statement` is **required**. |
+| **JAR Validator** | Inspect synthetic JAR with `Main-Class` present | Returns valid `FlinkJarManifestSchema` with bytecode version and main class. |
+| **JAR Validator** | Inspect JAR with unshaded `org.apache.flink.core.*` | Raises `ValueError`: bundled core Flink class detected. |
 | **Helm Render** | `helm template` on `streamtime-flink-cfk` with `flink.mode=session` | Emits `FlinkComputePool` (`computePoolType: SHARED`) and omits `FlinkApplication`. |
-| **Helm Render** | `helm template` on `streamtime-flink-cfk` with `flink.mode=session` and `flink.statement="INSERT INTO ..."` | Emits `FlinkComputePool` AND `FlinkStatement`. |
 | **Helm Render** | `helm template` on `streamtime-flink-session-job` with `job.provider=cmf` | Emits `FlinkStatement` referencing `spec.flinkComputePoolRef`. |
-| **Frontend UI** | `FlinkCreate.js` rendered with `workload="cmf"` and `mode="session"` | "Job Workspace" is selectable; Advance Configuration hides JAR toggle and displays SQL Statements field. |
-| **Frontend UI** | `FlinkJobCreate.js` rendered with CMF cluster | Application JAR input is hidden; Flink SQL Statement textarea is rendered. |
-
----
-
-## 5. Execution Steps for Implementation
-
-1. **Backend Schema & Serializers**:
-   - Edit `core/views/flink/config.py` to update `build_config` for `mode == "session"` and `mode == "session-job"`.
-   - Edit `core/serializers.py` to lift CMF session restriction, forbid `application_jar` in session mode, and validate `statement`.
-2. **Backend Runtime Components**:
-   - Edit `core/services/flink_components.py` to pop `application_jar` and pass `statement` in session mode.
-   - Edit `core/services/flink_job_components.py` to set `statement` and omit `applicationJar` for CMF.
-3. **Helm Charts**:
-   - Create `charts/streamtime-flink-cfk/templates/flink-compute-pool.yaml`.
-   - Create `charts/streamtime-flink-cfk/templates/flink-statement.yaml`.
-   - Guard `charts/streamtime-flink-cfk/templates/flink-application.yaml`.
-   - Update `charts/streamtime-flink-session-job/templates/flinksessionjob.yaml`.
-4. **Frontend UI**:
-   - Edit `fleet-manager-frontend/src/features/flink/FlinkCreate.js` (radio button unlock + Advance Configuration schema & fallback).
-   - Edit `fleet-manager-frontend/src/features/flink/FlinkJobCreate.js` (hide JAR, render SQL textarea).
-5. **Tests**:
-   - Run backend tests: `pytest core/tests/test_flink.py core/tests/views/test_flink_config.py`.
-   - Run helm lint/template commands.
-   - Run frontend tests: `npm test -- FlinkCreate.test.jsx`.
